@@ -34,6 +34,28 @@ jobs:
           nm -u out/ghvmprobe.ko | awk '{print $NF}' | sort -u | sed '/^$/d'
           echo "  total: $(nm -u out/ghvmprobe.ko | wc -l)"
 
+      - name: Build VM config DTB
+        run: |
+          set -e
+          K="${KDIR:-/ddk}"
+          if [ ! -d "$K" ]; then K=$(ls -d /ddk* 2>/dev/null | head -1); fi
+          DTC=""
+          for c in dtc "$K/scripts/dtc/dtc"; do
+            if command -v "$c" >/dev/null 2>&1 || [ -x "$c" ]; then DTC="$c"; break; fi
+          done
+          if [ -z "$DTC" ]; then
+            echo "no dtc found; trying apt"
+            (apt-get update -qq && apt-get install -y -qq device-tree-compiler) >/dev/null 2>&1 || true
+            command -v dtc >/dev/null 2>&1 && DTC=dtc
+          fi
+          if [ -z "$DTC" ]; then
+            echo "::error::no device-tree compiler available in the container"
+            exit 1
+          fi
+          echo "using dtc: $DTC"
+          "$DTC" -I dts -O dtb -o out/ghvm45.dtb vm/ghvm45.dts
+          ls -l out/ghvm45.dtb
+
       # 硬门：本模块用到的 gunyah 符号（gh_* 前缀）必须都能在**设备 kallsyms 的 gh_rm_drv
       # 导出清单**里查到 —— loader 是"按名填地址"，名字写错/符号不存在 = 设备上根本装不上。
       # 其余未定义符号（_printk / __stack_chk_fail / __ubsan_* 等）由 GKI 内核提供，只列出不判失败。
@@ -58,8 +80,8 @@ jobs:
           done < undef.txt
           exit "$bad"
 
-      - name: Upload ghvmprobe.ko
+      - name: Upload ghvmprobe.ko + ghvm45.dtb
         uses: actions/upload-artifact@v4
         with:
           name: aarch64-android13-5.15-ghvmprobe
-          path: out/ghvmprobe.ko
+          path: out/
