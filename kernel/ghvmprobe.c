@@ -444,7 +444,7 @@ static int has_prefix(const char *s, const char *p)
 	return 1;
 }
 
-static int next_arg(const char **p, char *outbuf, size_t n)
+static int ghvm_arg(const char **p, char *outbuf, size_t n)
 {
 	size_t i = 0;
 
@@ -494,7 +494,7 @@ static void dispatch(const char *cmd)
 		cmd_alloc(simple_atoi(p), *p != '\0');
 	} else if (has_prefix(p, "load")) {
 		p += 4;
-		if (next_arg(&p, a1, sizeof(a1)) || next_arg(&p, a2, sizeof(a2))) {
+		if (ghvm_arg(&p, a1, sizeof(a1)) || ghvm_arg(&p, a2, sizeof(a2))) {
 			out("usage: load <image> <dtb> [vmid]\n");
 			return;
 		}
@@ -557,7 +557,7 @@ static int __init ghvmprobe_init(void)
 		pr_err(DRV_TAG "platform_device_register_simple failed\n");
 		return PTR_ERR(ghvm_pdev);
 	}
-	if (dma_set_mask_and_coherent(&ghvm_pdev->dev, DMA_BIT_MASK(64)))
+	if (dma_set_mask_and_coherent(&ghvm_pdev->dev, DMA_BIT_MASK(48)))
 		dma_set_mask_and_coherent(&ghvm_pdev->dev, DMA_BIT_MASK(32));
 
 	gh_entry = proc_create(PROBE_NAME, 0644, NULL, &gh_proc_fops);
