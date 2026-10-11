@@ -1,0 +1,59 @@
+name: ghvmprobe.ko (android13-5.15)
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  lkm:
+    name: ghvmprobe.ko android13-5.15
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ylarod/ddk-min:android13-5.15-20260828
+      options: --privileged
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ghvmprobe.ko
+        run: |
+          set -e
+          git config --global --add safe.directory '*'
+          echo "KDIR env = '${KDIR:-<unset>}'"
+          K="${KDIR:-/ddk}"
+          if [ ! -d "$K" ]; then K=$(ls -d /ddk* 2>/dev/null | head -1); fi
+          echo "using KDIR=$K"
+          make -C "$K" M="$PWD/kernel" CC=clang LLVM=1 KBUILD_MODPOST_WARN=1 modules -j"$(nproc)"
+          mkdir -p out
+          cp kernel/ghvmprobe.ko out/
+          llvm-strip -d out/ghvmprobe.ko
+          echo "--- modinfo ---"
+          modinfo out/ghvmprobe.ko | grep -E 'name|vermagic|license' || true
+          echo "--- undefined imports ---"
+          nm -u out/ghvmprobe.ko | awk '{print $NF}' | sort -u | sed '/^$/d'
+          echo "  total: $(nm -u out/ghvmprobe.ko | wc -l)"
+
+      # 硬门：.ko 的每个未定义符号都必须在**设备 kallsyms 的 gh_rm_drv 导出清单**里
+      # （loader 是"按名填地址"，名字写错/符号不存在 = 设备上根本装不上，
+      #  这种错误必须在 CI 就失败，别等到真机。）
+      - name: Assert undefined symbols exist on the device
+        run: |
+          set -e
+          nm -u out/ghvmprobe.ko | awk '{print $NF}' | sort -u | sed '/^$/d' > undef.txt
+          echo "undefined count: $(wc -l < undef.txt)"; cat undef.txt
+          bad=0
+          while read -r s; do
+            [ -z "$s" ] && continue
+            if ! grep -qx "$s" kernel/gh_rm_drv_exports.txt; then
+              echo "::error::undefined symbol '$s' is not in kernel/gh_rm_drv_exports.txt (device gh_rm_drv exports)"
+              bad=1
+            fi
+          done < undef.txt
+          exit "$bad"
+
+      - name: Upload ghvmprobe.ko
+        uses: actions/upload-artifact@v4
+        with:
+          name: aarch64-android13-5.15-ghvmprobe
+          path: out/ghvmprobe.ko
