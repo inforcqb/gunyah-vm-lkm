@@ -43,7 +43,7 @@
 		image-name = "qcom,trustedvm";
 		qcom,secdomain-ids = <45>;
 		qcom,primary-vm-index = <0>;
-		vm-attrs = "crash-fatal";
+		/* no vm-attrs: 避免 crash-fatal 把 HLOS 一起带走 */
 
 		memory {
 			#address-cells = <0x2>;
