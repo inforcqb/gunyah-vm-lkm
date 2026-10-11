@@ -1,0 +1,122 @@
+/dts-v1/;
+/*
+ * ghvm45.dts — 给 HLOS 自己创建的次级 VM（vmid 45）用的最小 VM 配置 DTB。
+ *
+ * 依据（都是本机实测/本地源码）：
+ *   - 结构照 qcom/kalama-oemvm.dtsi（+ kalama-vm.dtsi）裁剪：
+ *     去掉 qcom,sensitive / qcom,qtee-config-info / qcom,pasid（我们走 auth_mech=0 免认证）、
+ *     去掉所有 virtio/swiotlb/msgq/qrtr vdevice（先只求"内核起来 + console 有输出"）。
+ *   - qcom,secdomain-ids = <45>：与 gh_rm_vm_alloc_vmid 在本机实际返回的 vmid 一致（45）。
+ *   - memory/base-address 沿用 0x28800000（VM 内 IPA 基址），size-min 72 MB（镜像 51.6 MB + 余量）。
+ *   - interrupts/config = &vgic（虚拟 GIC），vcpus 1 个（affinity-map = <0 0>）。
+ *   - vdevices/rm-rpc 带 console-dev ⇒ VM 的串口经 RM console 通道 ⇒ HLOS 侧 /dev/hvcN。
+ */
+/ {
+	#address-cells = <0x2>;
+	#size-cells = <0x2>;
+	interrupt-parent = <&vgic>;
+
+	chosen {
+		bootargs = "nokaslr console=hvc0 loglevel=8 earlycon";
+	};
+
+	cpus {
+		#address-cells = <0x1>;
+		#size-cells = <0x0>;
+
+		CPU0: cpu@0 {
+			compatible = "arm,armv8";
+			device_type = "cpu";
+			reg = <0x0>;
+			enable-method = "psci";
+		};
+	};
+
+	qcom,vm-config {
+		compatible = "qcom,vm-1.0";
+		vm-type = "aarch64-guest";
+		boot-config = "fdt,unified";
+		os-type = "linux";
+		kernel-entry-segment = "kernel";
+		kernel-entry-offset = <0x0 0x0>;
+		vendor = "QTI";
+		image-name = "qcom,trustedvm";
+		qcom,secdomain-ids = <45>;
+		qcom,primary-vm-index = <0>;
+		vm-attrs = "crash-fatal";
+
+		memory {
+			#address-cells = <0x2>;
+			#size-cells = <0x0>;
+			/* IPA address linux image is loaded at（与 OEMVM/TVM 一致） */
+			base-address = <0x0 0x28800000>;
+			size-min = <0x0 0x4800000>;	/* 72 MB */
+		};
+
+		vcpus {
+			config = "/cpus";
+			affinity = "proxy";
+			affinity-map = <0x0 0x0>;
+			sched-priority = <0>;
+			sched-timeslice = <2000>;
+		};
+
+		interrupts {
+			config = &vgic;
+		};
+
+		vdevices {
+			generate = "/hypervisor";
+
+			rm-rpc {
+				vdevice-type = "rm-rpc";
+				generate = "/hypervisor/qcom,resource-mgr";
+				console-dev;
+				message-size = <0x000000f0>;
+				queue-depth = <0x00000008>;
+				qcom,label = <0x1>;
+			};
+		};
+	};
+
+	firmware {
+		scm {
+			compatible = "qcom,scm";
+		};
+	};
+
+	soc: soc { };
+};
+
+&soc {
+	#address-cells = <0x1>;
+	#size-cells = <0x1>;
+	ranges = <0 0 0 0xffffffff>;
+	compatible = "simple-bus";
+
+	psci {
+		compatible = "arm,psci-1.0";
+		method = "smc";
+	};
+
+	vgic: interrupt-controller@17100000 {
+		compatible = "arm,gic-v3";
+		interrupt-controller;
+		#interrupt-cells = <0x3>;
+		#redistributor-regions = <1>;
+		redistributor-stride = <0x0 0x40000>;
+		reg = <0x17100000 0x10000>,	/* GICD */
+		      <0x17180000 0x100000>;	/* GICR * 8 */
+	};
+
+	arch_timer: timer {
+		compatible = "arm,armv8-timer";
+		always-on;
+		/* GIC_PPI(1) 13/14/11/12, level-low, CPU mask simple(8) */
+		interrupts = <0x1 0xd 0xf08>,
+			     <0x1 0xe 0xf08>,
+			     <0x1 0xb 0xf08>,
+			     <0x1 0xc 0xf08>;
+		clock-frequency = <19200000>;
+	};
+};
