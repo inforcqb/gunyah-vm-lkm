@@ -24,7 +24,7 @@ jobs:
           K="${KDIR:-/ddk}"
           if [ ! -d "$K" ]; then K=$(ls -d /ddk* 2>/dev/null | head -1); fi
           echo "using KDIR=$K"
-          make -C "$K" M="$PWD/kernel" CC=clang LLVM=1 KBUILD_MODPOST_WARN=1 modules -j"$(nproc)"
+          make -C "$K" M="$GITHUB_WORKSPACE/kernel" CC=clang LLVM=1 KBUILD_MODPOST_WARN=1 modules -j"$(nproc)"
           mkdir -p out
           cp kernel/ghvmprobe.ko out/
           llvm-strip -d out/ghvmprobe.ko
