@@ -34,21 +34,27 @@ jobs:
           nm -u out/ghvmprobe.ko | awk '{print $NF}' | sort -u | sed '/^$/d'
           echo "  total: $(nm -u out/ghvmprobe.ko | wc -l)"
 
-      # 硬门：.ko 的每个未定义符号都必须在**设备 kallsyms 的 gh_rm_drv 导出清单**里
-      # （loader 是"按名填地址"，名字写错/符号不存在 = 设备上根本装不上，
-      #  这种错误必须在 CI 就失败，别等到真机。）
-      - name: Assert undefined symbols exist on the device
+      # 硬门：本模块用到的 gunyah 符号（gh_* 前缀）必须都能在**设备 kallsyms 的 gh_rm_drv
+      # 导出清单**里查到 —— loader 是"按名填地址"，名字写错/符号不存在 = 设备上根本装不上。
+      # 其余未定义符号（_printk / __stack_chk_fail / __ubsan_* 等）由 GKI 内核提供，只列出不判失败。
+      - name: Assert gunyah symbols exist on the device
         run: |
           set -e
-          nm -u out/ghvmprobe.ko | awk '{print $NF}' | sort -u | sed '/^$/d' > undef.txt
-          echo "undefined count: $(wc -l < undef.txt)"; cat undef.txt
+          nm -u out/ghvmprobe.ko | awk '{print $NF}' | tr -d '\r' | sort -u | sed '/^$/d' > undef.txt
+          tr -d '\r' < kernel/gh_rm_drv_exports.txt | sed '/^$/d' | sort -u > allowed.txt
+          echo "--- undefined (all) ---"; cat undef.txt
+          echo "--- undefined (gh_*) ---"; grep '^gh_' undef.txt || true
           bad=0
           while read -r s; do
             [ -z "$s" ] && continue
-            if ! grep -qx "$s" kernel/gh_rm_drv_exports.txt; then
-              echo "::error::undefined symbol '$s' is not in kernel/gh_rm_drv_exports.txt (device gh_rm_drv exports)"
-              bad=1
-            fi
+            case "$s" in
+              gh_*)
+                if ! grep -qx "$s" allowed.txt; then
+                  echo "::error::gunyah symbol '$s' is not in kernel/gh_rm_drv_exports.txt (device gh_rm_drv exports)"
+                  bad=1
+                fi
+                ;;
+            esac
           done < undef.txt
           exit "$bad"
 
