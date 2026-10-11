@@ -58,6 +58,11 @@ typedef u16 gh_vmid_t;
 #define GH_RM_ACL_W BIT(1)
 #define GH_RM_ACL_R BIT(2)
 
+#define PERM_READ BIT(0)
+#define PERM_WRITE BIT(1)
+#define PERM_EXEC BIT(2)
+#define VMID_HLOS 3
+
 struct gh_acl_entry {
 	u16 vmid;
 	u8 perms;
@@ -105,6 +110,8 @@ extern int gh_rm_vm_init(gh_vmid_t vmid);
 extern int gh_rm_vm_start(int vmid);
 extern int gh_rm_vm_stop(gh_vmid_t vmid, u32 stop_reason, u8 flags);
 extern struct gh_vm_status *gh_rm_vm_get_status(gh_vmid_t vmid);
+extern int hyp_assign_phys(u64 addr, u64 size, u32 *src_vmid, int src_count,
+			   u32 *dest_vmid, int *dest_perms, int dest_count);
 
 static const char *const image_names[] = {
 	"pvm", "trustedvm", "cpusys_vm", "oem_vm", "autoghgvm",
@@ -189,7 +196,7 @@ static void cmd_help(void)
 	out("  status <vmid>            gh_rm_vm_get_status\n");
 	out("  load <img> <dtb> [vmid]  CMA + mem_lend + config_image(auth=0)\n");
 	out("  init <vmid> | start <vmid> | stop <vmid>\n");
-	out("  meminfo                  CMA buffer state\n");
+	out("  meminfo                  CMA buffer state\n  cmatest <bytes>          try dma_alloc_coherent(bytes) and free it\n");
 }
 
 static void cmd_names(void)
@@ -371,6 +378,15 @@ static void cmd_load(const char *imgp, const char *dtbp, int vmid)
 	sgl->sgl_entries[0].ipa_base = (u64)vm_membuf_dma;
 	sgl->sgl_entries[0].size = vm_membuf_size;
 
+	{
+		u32 src_vmlist[1] = { VMID_HLOS };
+		u32 dst_vmlist[1] = { (u32)vmid };
+		int dst_perms[1] = { PERM_READ | PERM_WRITE | PERM_EXEC };
+		int hret = hyp_assign_phys((u64)vm_membuf_dma, vm_membuf_size,
+					   src_vmlist, 1, dst_vmlist, dst_perms, 1);
+		out("hyp_assign_phys(phys=%pa size=%zu, src={%d}, dst={%d}, perms=RWX) -> ret=%d\n",
+		    &vm_membuf_dma, vm_membuf_size, VMID_HLOS, vmid, hret);
+	}
 	ret = gh_rm_mem_lend(GH_RM_MEM_TYPE_NORMAL, 0, 0, acl, sgl, NULL,
 			     &vm_mem_handle);
 	out("gh_rm_mem_lend(acl vmid=%d perms=0x%x, phys=%pa size=%zu) -> ret=%d handle=0x%x\n",
@@ -408,6 +424,20 @@ static void cmd_stop(int vmid)
 	out("gh_rm_vm_stop(%d) -> ret=%d\n", vmid,
 	    gh_rm_vm_stop((gh_vmid_t)vmid, 0, 0));
 	cmd_status(vmid);
+}
+
+static void cmd_cmatest(unsigned long bytes)
+{
+	void *v;
+	dma_addr_t d;
+
+	v = dma_alloc_coherent(&ghvm_pdev->dev, bytes, &d, GFP_KERNEL);
+	if (!v) {
+		out("dma_alloc_coherent(%lu) FAILED\n", bytes);
+		return;
+	}
+	out("dma_alloc_coherent(%lu) OK phys=%pa\n", bytes, &d);
+	dma_free_coherent(&ghvm_pdev->dev, bytes, v, d);
 }
 
 static void cmd_meminfo(void)
@@ -473,6 +503,8 @@ static void dispatch(const char *cmd)
 		cmd_names();
 	} else if (has_prefix(p, "meminfo")) {
 		cmd_meminfo();
+	} else if (has_prefix(p, "cmatest")) {
+		cmd_cmatest((unsigned long)simple_atoi(p + 7));
 	} else if (has_prefix(p, "rev")) {
 		cmd_rev(simple_atoi(p + 3));
 	} else if (has_prefix(p, "idinfo")) {
