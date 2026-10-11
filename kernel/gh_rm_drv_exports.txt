@@ -1,4 +1,4 @@
-﻿gh_arch_validate_vm_exited_notif
+gh_arch_validate_vm_exited_notif
 gh_dbl_populate_cap_info
 gh_dbl_read_and_clean
 gh_dbl_reset
