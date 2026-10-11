@@ -44,6 +44,9 @@
 #include <linux/dma-mapping.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
+#include <linux/dma-buf.h>
+#include <linux/dma-heap.h>
+#include <linux/scatterlist.h>
 
 #define DRV_TAG "ghvmprobe: "
 #define PROBE_NAME "ghvmprobe"
@@ -112,6 +115,11 @@ extern int gh_rm_vm_stop(gh_vmid_t vmid, u32 stop_reason, u8 flags);
 extern struct gh_vm_status *gh_rm_vm_get_status(gh_vmid_t vmid);
 extern int hyp_assign_phys(u64 addr, u64 size, u32 *src_vmid, int src_count,
 			   u32 *dest_vmid, int *dest_perms, int dest_count);
+extern struct dma_heap *dma_heap_find(const char *name);
+extern void dma_heap_put(struct dma_heap *heap);
+extern struct dma_buf *dma_heap_buffer_alloc(struct dma_heap *heap, size_t len,
+					     unsigned int fd_flags, unsigned int heap_flags);
+extern void dma_heap_buffer_free(struct dma_buf *dmabuf);
 
 static const char *const image_names[] = {
 	"pvm", "trustedvm", "cpusys_vm", "oem_vm", "autoghgvm",
@@ -196,7 +204,7 @@ static void cmd_help(void)
 	out("  status <vmid>            gh_rm_vm_get_status\n");
 	out("  load <img> <dtb> [vmid]  CMA + mem_lend + config_image(auth=0)\n");
 	out("  init <vmid> | start <vmid> | stop <vmid>\n");
-	out("  meminfo                  CMA buffer state\n  cmatest <bytes>          try dma_alloc_coherent(bytes) and free it\n");
+	out("  meminfo                  CMA buffer state\n  cmatest <bytes>          try dma_alloc_coherent(bytes) and free it\n  heapalloc <heap> <bytes> dma_heap_buffer_alloc + physical contiguity check\n");
 }
 
 static void cmd_names(void)
@@ -426,6 +434,51 @@ static void cmd_stop(int vmid)
 	cmd_status(vmid);
 }
 
+/* 用 dma-heap 从 CMA 类池里要一大块连续内存，并检查物理连续性 */
+static void cmd_heapalloc(const char *heapname, unsigned long bytes)
+{
+	struct dma_heap *h;
+	struct dma_buf *b;
+	struct dma_buf_attachment *att;
+	struct sg_table *sgt;
+
+	h = dma_heap_find(heapname);
+	if (!h) {
+		out("dma_heap_find('%s') -> NULL\n", heapname);
+		return;
+	}
+	out("heap '%s' found; allocating %lu bytes...\n", heapname, bytes);
+	b = dma_heap_buffer_alloc(h, bytes, O_RDWR, 0);
+	if (IS_ERR(b)) {
+		out("dma_heap_buffer_alloc(%lu) -> ERR %ld\n", bytes, PTR_ERR(b));
+		dma_heap_put(h);
+		return;
+	}
+	out("buffer alloc OK\n");
+	att = dma_buf_attach(b, &ghvm_pdev->dev);
+	if (IS_ERR(att)) {
+		out("dma_buf_attach -> ERR %ld\n", PTR_ERR(att));
+	} else {
+		sgt = dma_buf_map_attachment(att, DMA_BIDIRECTIONAL);
+		if (IS_ERR(sgt)) {
+			out("map_attachment -> ERR %ld\n", PTR_ERR(sgt));
+		} else {
+			phys_addr_t ph = sg_phys(sgt->sgl);
+
+			out("sgt: nents=%u first: phys=%pa len=%u\n",
+			    sgt->nents, &ph, sgt->sgl->length);
+			if (sgt->nents == 1 && sgt->sgl->length == bytes)
+				out("=> CONTIGUOUS %lu bytes, safe to lend\n", bytes);
+			else
+				out("=> NOT contiguous (nents=%u)\n", sgt->nents);
+			dma_buf_unmap_attachment(att, sgt, DMA_BIDIRECTIONAL);
+		}
+		dma_buf_detach(b, att);
+	}
+	dma_heap_buffer_free(b);
+	dma_heap_put(h);
+}
+
 static void cmd_cmatest(unsigned long bytes)
 {
 	void *v;
@@ -505,6 +558,13 @@ static void dispatch(const char *cmd)
 		cmd_meminfo();
 	} else if (has_prefix(p, "cmatest")) {
 		cmd_cmatest((unsigned long)simple_atoi(p + 7));
+	} else if (has_prefix(p, "heapalloc")) {
+		p += 9;
+		if (ghvm_arg(&p, a1, sizeof(a1))) {
+			out("usage: heapalloc <heap-name> <bytes>\n");
+			return;
+		}
+		cmd_heapalloc(a1, (unsigned long)simple_atoi(p));
 	} else if (has_prefix(p, "rev")) {
 		cmd_rev(simple_atoi(p + 3));
 	} else if (has_prefix(p, "idinfo")) {
